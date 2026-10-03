@@ -18,6 +18,25 @@ type pveClient struct {
 	transport *http.Transport
 }
 
+// The upstream client does not reject every unsuccessful HTTP status.
+// Enforce that boundary without retaining or logging response bodies.
+type statusTransport struct{ base http.RoundTripper }
+
+func (t statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, pve.ErrNotAuthorized
+		}
+		return nil, fmt.Errorf("unsuccessful PVE HTTP status %d", resp.StatusCode)
+	}
+	return resp, nil
+}
+
 func newPVEClient(cfg *config) (*pveClient, error) {
 	roots, err := x509.SystemCertPool()
 	if err != nil {
@@ -29,7 +48,7 @@ func newPVEClient(cfg *config) (*pveClient, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	client := &http.Client{
-		Transport: transport,
+		Transport: statusTransport{base: transport},
 		Timeout:   cfg.Timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse

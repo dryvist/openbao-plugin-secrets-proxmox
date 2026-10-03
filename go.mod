@@ -3,6 +3,7 @@ module github.com/dryvist/openbao-plugin-secrets-proxmox
 go 1.27.0
 
 require (
+	github.com/hashicorp/go-uuid v1.0.3
 	github.com/luthermonson/go-proxmox v0.8.2
 	github.com/openbao/openbao/api/v2 v2.7.1
 	github.com/openbao/openbao/sdk/v2 v2.7.1
@@ -34,7 +35,6 @@ require (
 	github.com/hashicorp/go-secure-stdlib/parseutil v0.2.0 // indirect
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
-	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect

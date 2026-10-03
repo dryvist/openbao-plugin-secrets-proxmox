@@ -103,6 +103,15 @@ func (b *backend) configWrite(ctx context.Context, req *logical.Request, d *fram
 		if len(roles) > 0 {
 			return logical.ErrorResponse("endpoint and management user cannot change while roles exist"), nil
 		}
+		for _, prefix := range []string{tokenPrefix, userPrefix, framework.WALPrefix} {
+			keys, err := req.Storage.List(ctx, prefix)
+			if err != nil {
+				return nil, fmt.Errorf("cannot check managed resources")
+			}
+			if len(keys) > 0 {
+				return logical.ErrorResponse("endpoint and management user cannot change while managed resources or recovery records exist"), nil
+			}
+		}
 	}
 	client, err := newPVEClient(&cfg)
 	if err != nil {
