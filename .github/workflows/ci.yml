@@ -1,0 +1,59 @@
+name: Foundation checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Verify modules
+        run: go mod verify
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Race tests
+        run: go test -race ./...
+  markdown:
+    uses: dryvist/.github/.github/workflows/_markdown-lint.yml@9cb1a5f05818fece155c44d70a3b82a0a8442c93
+  nix:
+    uses: dryvist/.github/.github/workflows/_nix-validate.yml@9cb1a5f05818fece155c44d70a3b82a0a8442c93
+    with:
+      all_systems: false
+  integration:
+    name: Local OpenBao and dependency scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@8d87e8d5e5b8a8309d4281094560f127d9a265f1 # v3
+      - name: Register and exercise two mounts
+        run: nix develop -c env BAO_TEST_BINARY=bao go test -race -run TestOpenBaoMounts -v .
+      - name: Scan reachable Go vulnerabilities
+        run: nix develop -c govulncheck ./...
