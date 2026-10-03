@@ -1,0 +1,7 @@
+.worktrees/
+result
+bin/
+.direnv/
+.omo/
+coverage.out
+/openbao-plugin-secrets-proxmox
