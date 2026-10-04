@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -138,6 +139,30 @@ func requireError(t *testing.T, resp *logical.Response, secret string) {
 
 func roleData() map[string]interface{} {
 	return map[string]interface{}{"user": "reader@pve", "pve_role": "PVEAuditor", "acl_path": "/vms", "ttl": "15m", "max_ttl": "1h"}
+}
+
+func TestStateMutatingHandlersForwardOnPerformanceNodes(t *testing.T) {
+	b := &backend{}
+	rolePath := pathsRoles(b)[1]
+	for _, tc := range []struct {
+		name    string
+		handler framework.OperationHandler
+	}{
+		{"credential issuance", pathCreds(b).Operations[logical.ReadOperation]},
+		{"configuration update", pathConfig(b).Operations[logical.UpdateOperation]},
+		{"role update", rolePath.Operations[logical.UpdateOperation]},
+		{"role delete", rolePath.Operations[logical.DeleteOperation]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, ok := tc.handler.(*framework.PathOperation)
+			if !ok {
+				t.Fatal("operation is not a PathOperation")
+			}
+			if !handler.ForwardPerformanceStandby || !handler.ForwardPerformanceSecondary {
+				t.Fatal("operation must forward from performance standby and secondary nodes")
+			}
+		})
+	}
 }
 
 func TestConfigSecretAndFailedUpdate(t *testing.T) {
