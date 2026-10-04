@@ -17,6 +17,7 @@ type lifecycleFixture struct {
 	server          *httptest.Server
 	mu              sync.Mutex
 	secret          string
+	secrets         map[string]string
 	users           map[string]*pve.User
 	roles           map[string]map[string]bool
 	tokens          map[string]map[string]pve.Token
@@ -33,7 +34,8 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 	t.Helper()
 	f := &lifecycleFixture{secret: "synthetic-private-management-sentinel", users: map[string]*pve.User{
 		"manager@pve": {UserID: "manager@pve", Enable: true}, "reader@pve": {UserID: "reader@pve", Enable: true},
-	}, roles: map[string]map[string]bool{"PVEAuditor": {"VM.Audit": true}, "Administrator": {"VM.Audit": true, "Sys.Audit": true}}, tokens: map[string]map[string]pve.Token{}, acl: pve.ACLs{}}
+	}, roles: map[string]map[string]bool{"PVEAuditor": {"VM.Audit": true}, "Administrator": {"VM.Audit": true, "Sys.Audit": true}}, tokens: map[string]map[string]pve.Token{"manager@pve": {"engine": {TokenID: "engine", Privsep: true}}}, acl: pve.ACLs{}}
+	f.secrets = map[string]string{"manager@pve!engine": f.secret}
 	f.server = httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.server.Close)
 	return f
@@ -47,7 +49,8 @@ func (f *lifecycleFixture) configData() map[string]interface{} {
 func (f *lifecycleFixture) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if r.Header.Get("Authorization") != "PVEAPIToken=manager@pve!engine="+f.secret {
+	id, value, found := strings.Cut(strings.TrimPrefix(r.Header.Get("Authorization"), "PVEAPIToken="), "=")
+	if !found || f.secrets[id] == "" || f.secrets[id] != value {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -106,56 +109,54 @@ func (f *lifecycleFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if len(parts) == 3 && parts[1] == "token" {
 			id := parts[2]
-			if user == "manager@pve" && id == "engine" {
-				data = pve.Token{TokenID: id, Privsep: true}
-			} else {
-				switch r.Method {
-				case http.MethodPost:
-					var token pve.Token
-					if err := json.NewDecoder(r.Body).Decode(&token); err != nil || !bool(token.Privsep) {
-						f.privsepRejected = true
-						w.WriteHeader(http.StatusBadRequest)
-						return
-					}
-					if f.tokens[user] == nil {
-						f.tokens[user] = map[string]pve.Token{}
-					}
-					token.TokenID = id
-					f.tokens[user][id] = token
-					value := "issued-" + id
-					if f.echoSecret {
-						value = f.secret
-					}
-					data = pve.NewAPIToken{FullTokenID: user + "!" + id, Value: value, Info: token}
-				case http.MethodGet:
-					token, ok := f.tokens[user][id]
-					if !ok {
-						w.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					data = token
-				case http.MethodPut:
-					var token pve.Token
-					if err := json.NewDecoder(r.Body).Decode(&token); err != nil || !bool(token.Privsep) {
-						w.WriteHeader(http.StatusBadRequest)
-						return
-					}
-					if _, ok := f.tokens[user][id]; !ok {
-						w.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					token.TokenID = id
-					f.tokens[user][id] = token
-				case http.MethodDelete:
-					if _, ok := f.tokens[user][id]; !ok {
-						w.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					delete(f.tokens[user], id)
-				default:
-					w.WriteHeader(http.StatusMethodNotAllowed)
+			switch r.Method {
+			case http.MethodPost:
+				var token pve.Token
+				if err := json.NewDecoder(r.Body).Decode(&token); err != nil || !bool(token.Privsep) {
+					f.privsepRejected = true
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
+				if f.tokens[user] == nil {
+					f.tokens[user] = map[string]pve.Token{}
+				}
+				token.TokenID = id
+				f.tokens[user][id] = token
+				value := "issued-" + id
+				if f.echoSecret {
+					value = f.secret
+				}
+				f.secrets[user+"!"+id] = value
+				data = pve.NewAPIToken{FullTokenID: user + "!" + id, Value: value, Info: token}
+			case http.MethodGet:
+				token, ok := f.tokens[user][id]
+				if !ok {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				data = token
+			case http.MethodPut:
+				var token pve.Token
+				if err := json.NewDecoder(r.Body).Decode(&token); err != nil || !bool(token.Privsep) {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if _, ok := f.tokens[user][id]; !ok {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				token.TokenID = id
+				f.tokens[user][id] = token
+			case http.MethodDelete:
+				if _, ok := f.tokens[user][id]; !ok {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				delete(f.tokens[user], id)
+				delete(f.secrets, user+"!"+id)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
 			}
 		} else {
 			w.WriteHeader(http.StatusNotFound)
@@ -235,7 +236,10 @@ func (f *lifecycleFixture) tokenCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	count := 0
-	for _, tokens := range f.tokens {
+	for user, tokens := range f.tokens {
+		if user == "manager@pve" {
+			continue
+		}
 		count += len(tokens)
 	}
 	return count

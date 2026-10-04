@@ -280,6 +280,19 @@ func (b *backend) periodic(ctx context.Context, req *logical.Request) error {
 }
 
 func (b *backend) rollback(ctx context.Context, req *logical.Request, kind string, data interface{}) error {
+	if kind == rootWALKind {
+		encoded, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("invalid management recovery record")
+		}
+		var rotation rootRotation
+		if err := json.Unmarshal(encoded, &rotation); err != nil {
+			return fmt.Errorf("invalid management recovery record")
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.recoverRootLocked(ctx, req.Storage, &rotation)
+	}
 	if kind != tokenWALKind {
 		return fmt.Errorf("unknown provisioning recovery kind")
 	}

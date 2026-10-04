@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	pve "github.com/luthermonson/go-proxmox"
 	"github.com/openbao/openbao/api/v2"
 )
 
@@ -86,6 +87,7 @@ func TestOpenBaoMounts(t *testing.T) {
 	first := newLifecycleFixture(t)
 	second := newLifecycleFixture(t)
 	second.secret = "synthetic-private-management-sentinel-B"
+	second.secrets["manager@pve!engine"] = second.secret
 	for _, mount := range []struct {
 		name    string
 		fixture *lifecycleFixture
@@ -116,6 +118,29 @@ func TestOpenBaoMounts(t *testing.T) {
 	if secret, err := client.Logical().ReadWithContext(ctx, "first/roles/second"); err != nil || secret != nil {
 		t.Fatal("roles crossed mount boundary")
 	}
+	first.mu.Lock()
+	first.acl = append(first.acl, &pve.ACL{Path: "/", RoleID: "Administrator", Type: "token", UGID: "manager@pve!engine", Propagate: true})
+	first.mu.Unlock()
+	rotation, err := client.Logical().WriteWithContext(ctx, "first/config/rotate-root", map[string]interface{}{})
+	if err != nil || rotation == nil || rotation.LeaseID != "" {
+		t.Fatal("native management rotation did not complete without a credential lease")
+	}
+	rotatedID, ok := rotation.Data["token_id"].(string)
+	if !ok || rotatedID == "manager@pve!engine" {
+		t.Fatal("native management rotation did not replace the token")
+	}
+	first.mu.Lock()
+	rotatedSecret := first.secrets[rotatedID]
+	retired := first.secrets["manager@pve!engine"] == ""
+	first.mu.Unlock()
+	encodedRotation, err := json.Marshal(rotation)
+	if err != nil || rotatedSecret == "" || !retired || strings.Contains(string(encodedRotation), rotatedSecret) {
+		t.Fatal("native rotation did not privately replace and retire management credentials")
+	}
+	secondConfig, err := client.Logical().ReadWithContext(ctx, "second/config")
+	if err != nil || secondConfig == nil || secondConfig.Data["token_id"] != "manager@pve!engine" {
+		t.Fatal("native rotation crossed mount boundary")
+	}
 	mint := func(c *api.Client, path string, fixture *lifecycleFixture) *api.Secret {
 		t.Helper()
 		secret, err := c.Logical().ReadWithContext(ctx, path)
@@ -125,6 +150,17 @@ func TestOpenBaoMounts(t *testing.T) {
 		encoded, err := json.Marshal(secret)
 		if err != nil || strings.Contains(string(encoded), fixture.secret) {
 			t.Fatal("dynamic response disclosed management credentials")
+		}
+		fixture.mu.Lock()
+		disclosed := false
+		for id, value := range fixture.secrets {
+			if strings.HasPrefix(id, "manager@pve!") && strings.Contains(string(encoded), value) {
+				disclosed = true
+			}
+		}
+		fixture.mu.Unlock()
+		if disclosed {
+			t.Fatal("dynamic response disclosed a rotated management credential")
 		}
 		if secret.Data["secret"] == "" || secret.Data["token_id_full"] == "" {
 			t.Fatal("dynamic response omitted issued credentials")

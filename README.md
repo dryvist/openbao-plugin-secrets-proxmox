@@ -15,9 +15,10 @@ Proxmox resources.
 
 See the [implementation plan](docs/implementation-plan.md) for phase boundaries
 and acceptance gates. Local OpenBao tests use a TLS API fixture. Live Proxmox
-VE 9 acceptance remains pending, so Gate 2 is not yet accepted. Management
-token replacement and static-role rotation are planned for Gate 3. This is
-not a production release.
+VE 9 acceptance remains pending, so Gate 2 is not yet accepted. Gate 3
+management-token replacement is available for local testing under the
+implementation exception; static-role rotation remains planned. This is not
+a production release.
 
 ## Build and test
 
@@ -129,8 +130,30 @@ bao delete proxmox/roles/reader
 | `max_ttl` | Optional maximum lease duration; zero or omitted uses mount defaults. |
 
 The API supports read, write, and delete at `roles/<name>`, and list at `roles`.
-Role reads contain configuration only. Root rotation and static-role endpoints
-remain unimplemented.
+Role reads contain configuration only. Static-role endpoints remain planned.
+
+## Management credential rotation
+
+The configured management token must be dedicated to this engine mount.
+Rotate it through the standard write endpoint:
+
+```sh
+bao write -f proxmox/config/rotate-root
+```
+
+The replacement uses `privsep=1`, the same token ACL bindings and propagation,
+and the predecessor's expiry. The engine verifies authentication and ACL scope
+before storing the replacement privately in seal-wrapped configuration. It
+then deletes the predecessor and its token ACLs. Responses contain the current
+token ID only; the replacement secret is never returned.
+
+Recovery records contain token identities without credential values. Before a
+configuration switch, recovery removes the uncommitted replacement. After the
+switch, recovery retires the predecessor. Failed retirement retains the
+verified replacement and its recovery record. Repeating the rotation write or
+the SDK rollback callback completes recovery; configuration writes are blocked
+while recovery is pending. These behaviors have local fixture coverage, with
+live PVE acceptance pending.
 
 ## Dynamic credentials
 

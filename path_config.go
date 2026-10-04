@@ -72,6 +72,13 @@ func (b *backend) configWrite(ctx context.Context, req *logical.Request, d *fram
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	_, pending, err := pendingRootRotation(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if pending != nil {
+		return logical.ErrorResponse("finish management rotation recovery before changing configuration"), nil
+	}
 	previous, err := readConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err

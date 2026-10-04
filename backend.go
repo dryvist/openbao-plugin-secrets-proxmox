@@ -25,7 +25,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 		PathsSpecial: &logical.Paths{
 			SealWrapStorage: []string{"config"},
 		},
-		Paths:             append([]*framework.Path{pathConfig(b), pathCreds(b)}, pathsRoles(b)...),
+		Paths:             append([]*framework.Path{pathConfig(b), pathConfigRotateRoot(b), pathCreds(b)}, pathsRoles(b)...),
 		Secrets:           []*framework.Secret{secretToken(b)},
 		PeriodicFunc:      b.periodic,
 		WALRollback:       b.rollback,
