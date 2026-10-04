@@ -18,7 +18,7 @@ The [README](../README.md) is the current configuration and role reference.
 | --- | --- | --- |
 | 1 | Multiplexed plugin; secure connection configuration; validated role read, write, delete, and list; build and tests. | Implemented and locally verified. |
 | 2 | Leased `privsep=1` tokens; provisioning at issuance; native `framework.Secret` revocation. | Implemented; live acceptance pending. |
-| 3 | Private management token replacement; static roles and rotation. | Root rotation tested locally; static rotation planned; live tests deferred. |
+| 3 | Private management token replacement; static roles and rotation. | Rotation implemented and tested locally; live acceptance deferred. |
 | 4 | PVE and OpenBao acceptance; signed artifacts and operational documentation. | Planned; no production publication. |
 
 Phase 2 uses a unique managed Proxmox role per token to preserve the requested

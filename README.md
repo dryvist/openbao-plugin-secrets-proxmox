@@ -6,7 +6,7 @@ tags: [openbao, proxmox, secrets-engine]
 timestamp: 2026-10-03T16:52:45Z
 ---
 
-This project implements **Gate 2: dynamic credentials**. It provides a
+This project implements dynamic credentials and Gate 3 rotation. It provides a
 multiplexed OpenBao plugin, validated connection configuration, role storage,
 and renewable leased API tokens. Reading `creds/<name>` creates a
 privilege-separated token with its own ACL. OpenBao lease revocation and
@@ -16,9 +16,8 @@ Proxmox resources.
 See the [implementation plan](docs/implementation-plan.md) for phase boundaries
 and acceptance gates. Local OpenBao tests use a TLS API fixture. Live Proxmox
 VE 9 acceptance remains pending, so Gate 2 is not yet accepted. Gate 3
-management-token replacement is available for local testing under the
-implementation exception; static-role rotation remains planned. This is not
-a production release.
+management and static-token rotation are available for local testing under
+the implementation exception. This is not a production release.
 
 ## Build and test
 
@@ -34,10 +33,12 @@ BAO_TEST_BINARY=bao go test -race -run TestOpenBaoMounts -v .
 The dependency baseline is Go 1.27, OpenBao SDK/API v2.7.1, and
 `github.com/luthermonson/go-proxmox` v0.8.2. The tests cover privilege
 separation, ACLs, renewal limits, cleanup retries, provisioning recovery,
-and management-secret omission. The opt-in OpenBao test builds and registers
+management-token replacement, scheduled static rotation, and
+management-secret omission. The opt-in OpenBao test builds and registers
 the plugin in an isolated, loopback-only development server. It exercises
 issuance, renewal, revocation, automatic expiry, parent-token revocation, and
-two independent mounts against TLS fixtures. These checks do not establish
+static credential reads and replacement, and two independent mounts against
+TLS fixtures. These checks do not establish
 live Proxmox behavior.
 
 ## Local registration
@@ -130,7 +131,7 @@ bao delete proxmox/roles/reader
 | `max_ttl` | Optional maximum lease duration; zero or omitted uses mount defaults. |
 
 The API supports read, write, and delete at `roles/<name>`, and list at `roles`.
-Role reads contain configuration only. Static-role endpoints remain planned.
+Role reads contain configuration only.
 
 ## Management credential rotation
 
@@ -193,6 +194,48 @@ deletion is an error so OpenBao can retry. Provisioning uses the SDK's
 write-ahead log; retained ownership records allow the backend's periodic
 callback to recover expired tokens after restart or failed lease registration.
 These recovery records contain identities and deadlines, without token values.
+
+## Static credentials
+
+Static roles manage long-lived, privilege-separated tokens on an interval.
+They use the same permission fields as dynamic roles and require a
+`rotation_period` between one minute and 365 days. They reject `ttl` and
+`max_ttl`, which apply to dynamic leases. Writing a static role provisions a
+replacement immediately, including when changing its interval or permissions.
+
+```sh
+bao write proxmox/static-roles/reader \
+  user='reader@pve' \
+  pve_role=PVEAuditor \
+  acl_path=/vms \
+  propagate=false \
+  rotation_period=24h
+bao read proxmox/static-roles/reader
+bao list proxmox/static-roles
+bao read proxmox/static-creds/reader
+bao delete proxmox/static-roles/reader
+```
+
+`static-creds/<name>` returns the current `token_id`, `token_id_full`, and
+`secret`, with `rotation_period`, `last_rotation`, `next_rotation`, and `ttl`.
+Repeated reads return the same credential until rotation. There is no OpenBao
+lease. The response's `ttl` counts down to scheduled rotation; it is not a
+Proxmox expiration deadline. Static tokens have no Proxmox expiry, so rotation
+requires the engine to run and reach the Proxmox API.
+
+The engine verifies the replacement's privilege separation and ACL before
+committing its secret, role settings, and next rotation time together in
+seal-wrapped storage. It then retires the previous token, its ACLs, and its
+owned role. The native periodic callback rotates due roles and retries pending
+recovery. Stored schedules survive restart. A failed retirement preserves the
+committed replacement for authorized reads.
+
+Write-ahead recovery records contain identities without secrets. Recovery
+removes an uncommitted replacement or retires a predecessor after commit.
+Deleting a static role records a durable deletion intent, removes the readable
+credential, and cleans up its owned resources. Recovery retries incomplete
+deletion after restart. Dynamic expiry cleanup skips static tokens. Each mount
+keeps its own static credentials and schedule.
 
 ## Design references and license
 
