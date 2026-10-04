@@ -62,14 +62,16 @@ actions and actual token deletion. A local API fixture does not replace this
 gate. The Gate 3 implementation exception permits code and local testing;
 live acceptance and production deployment remain separate decisions.
 
-At Gate 3, add `config/rotate-root`, `static-roles/<name>`, and
+## Gate 3 design and verification
+
+The engine provides `config/rotate-root`, `static-roles/<name>`, and
 `static-creds/<name>` using the existing SDK callbacks and storage. Management
 token replacement must create and verify the replacement before retiring the
 old token, persist recovery state across interruptions, and return no private
 credential. Static rotation must retain a usable token until its replacement
 is verified, resume after restart, and follow each role's rotation schedule.
 
-Implement management rotation before static rotation. Preserve the configured
+Management rotation was implemented before static rotation. Preserve the configured
 management token's own ACL scope on a privilege-separated replacement. Persist
 the verified replacement only in seal-wrapped credential storage. Recovery
 records carry identities and lifecycle state, never credential values. Test
