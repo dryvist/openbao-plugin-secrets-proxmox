@@ -39,17 +39,7 @@ func pathsRoles(b *backend) []*framework.Path {
 		},
 		{
 			Pattern: "roles/" + framework.GenericNameRegex("name") + "$",
-			Fields: map[string]*framework.FieldSchema{
-				"name":             {Type: framework.TypeString, Description: "Role name."},
-				"user":             {Type: framework.TypeString, Description: "PVE token owner, user@realm."},
-				"auto_create_user": {Type: framework.TypeBool, Default: false, Description: "Create an engine-owned passwordless pve-realm user at credential issuance."},
-				"pve_role":         {Type: framework.TypeString, Description: "Existing PVE role; mutually exclusive with privileges."},
-				"privileges":       {Type: framework.TypeCommaStringSlice, Description: "PVE privileges for an engine-owned custom role; mutually exclusive with pve_role."},
-				"acl_path":         {Type: framework.TypeString, Description: "Absolute PVE ACL path."},
-				"propagate":        {Type: framework.TypeBool, Default: false, Description: "Propagate the token ACL to child paths."},
-				"ttl":              {Type: framework.TypeDurationSecond, Description: "Default lease TTL; zero uses the mount default."},
-				"max_ttl":          {Type: framework.TypeDurationSecond, Description: "Maximum lease TTL; zero uses the mount maximum."},
-			},
+			Fields:  roleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation:   &framework.PathOperation{Callback: b.roleRead},
 				logical.UpdateOperation: &framework.PathOperation{Callback: b.roleWrite, ForwardPerformanceStandby: true, ForwardPerformanceSecondary: true},
@@ -119,29 +109,8 @@ func (b *backend) roleWrite(ctx context.Context, req *logical.Request, d *framew
 	if r == nil {
 		r = &role{}
 	}
-	for field, target := range map[string]*string{"user": &r.User, "pve_role": &r.PVERole, "acl_path": &r.ACLPath} {
-		if value, ok := d.Raw[field]; ok {
-			text, ok := value.(string)
-			if !ok {
-				return logical.ErrorResponse("role fields must have their declared types"), nil
-			}
-			*target = text
-		}
-	}
-	if _, ok := d.Raw["privileges"]; ok {
-		r.Privileges = d.Get("privileges").([]string)
-	}
-	if _, ok := d.Raw["auto_create_user"]; ok {
-		r.AutoCreateUser = d.Get("auto_create_user").(bool)
-	}
-	if _, ok := d.Raw["propagate"]; ok {
-		r.Propagate = d.Get("propagate").(bool)
-	}
-	if _, ok := d.Raw["ttl"]; ok {
-		r.TTL = d.Get("ttl").(int)
-	}
-	if _, ok := d.Raw["max_ttl"]; ok {
-		r.MaxTTL = d.Get("max_ttl").(int)
+	if err := applyRoleFields(d, r); err != nil {
+		return logical.ErrorResponse("%s", err), nil
 	}
 	if err := b.validateRole(r); err != nil {
 		return logical.ErrorResponse("%s", err), nil
@@ -209,6 +178,48 @@ func (b *backend) validateRole(r *role) error {
 	_, _, err := framework.CalculateTTL(b.System(), 0, time.Duration(r.TTL)*time.Second, 0, time.Duration(r.MaxTTL)*time.Second, 0, time.Time{})
 	if err != nil {
 		return fmt.Errorf("role TTLs cannot produce a bounded lease")
+	}
+	return nil
+}
+
+func roleFields() map[string]*framework.FieldSchema {
+	return map[string]*framework.FieldSchema{
+		"name":             {Type: framework.TypeString, Description: "Role name."},
+		"user":             {Type: framework.TypeString, Description: "PVE token owner, user@realm."},
+		"auto_create_user": {Type: framework.TypeBool, Default: false, Description: "Create an engine-owned passwordless pve-realm user at credential issuance."},
+		"pve_role":         {Type: framework.TypeString, Description: "Existing PVE role; mutually exclusive with privileges."},
+		"privileges":       {Type: framework.TypeCommaStringSlice, Description: "PVE privileges for an engine-owned custom role; mutually exclusive with pve_role."},
+		"acl_path":         {Type: framework.TypeString, Description: "Absolute PVE ACL path."},
+		"propagate":        {Type: framework.TypeBool, Default: false, Description: "Propagate the token ACL to child paths."},
+		"ttl":              {Type: framework.TypeDurationSecond, Description: "Default lease TTL; zero uses the mount default."},
+		"max_ttl":          {Type: framework.TypeDurationSecond, Description: "Maximum lease TTL; zero uses the mount maximum."},
+	}
+}
+
+func applyRoleFields(d *framework.FieldData, r *role) error {
+	for field, target := range map[string]*string{"user": &r.User, "pve_role": &r.PVERole, "acl_path": &r.ACLPath} {
+		if value, ok := d.Raw[field]; ok {
+			text, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("role fields must have their declared types")
+			}
+			*target = text
+		}
+	}
+	if _, ok := d.Raw["privileges"]; ok {
+		r.Privileges = d.Get("privileges").([]string)
+	}
+	if _, ok := d.Raw["auto_create_user"]; ok {
+		r.AutoCreateUser = d.Get("auto_create_user").(bool)
+	}
+	if _, ok := d.Raw["propagate"]; ok {
+		r.Propagate = d.Get("propagate").(bool)
+	}
+	if _, ok := d.Raw["ttl"]; ok {
+		r.TTL = d.Get("ttl").(int)
+	}
+	if _, ok := d.Raw["max_ttl"]; ok {
+		r.MaxTTL = d.Get("max_ttl").(int)
 	}
 	return nil
 }
