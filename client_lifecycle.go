@@ -82,7 +82,7 @@ func (c *pveClient) tokenExists(ctx context.Context, r *tokenRecord) (bool, erro
 		return false, fmt.Errorf("invalid PVE token collection")
 	}
 	for _, token := range tokens {
-		if token == nil || !validIdentifier(token.TokenID) {
+		if token == nil || token.TokenID == "" {
 			return false, fmt.Errorf("invalid PVE token collection")
 		}
 		if token.TokenID == r.TokenID {

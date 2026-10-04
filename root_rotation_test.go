@@ -144,3 +144,26 @@ func TestRootRotationBeforeSwitchRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestRootRotationUnrelatedTokenSyntax(t *testing.T) {
+	b, s, f := setupRootRotation(t)
+	external := "external-" + strings.Repeat("x", 80)
+	f.mu.Lock()
+	f.tokens["manager@pve"][external] = pve.Token{TokenID: external, Privsep: true}
+	f.mu.Unlock()
+	resp := request(t, b, s, logical.UpdateOperation, "config/rotate-root", nil)
+	requireSuccess(t, resp)
+	cfg, err := readConfig(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPrivate(t, s, resp, cfg.TokenSecret)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.tokens["manager@pve"]["engine"]; ok {
+		t.Fatal("rotation did not retire predecessor")
+	}
+	if f.tokens["manager@pve"][external].TokenID != external {
+		t.Fatal("rotation changed an unrelated management-user token")
+	}
+}
