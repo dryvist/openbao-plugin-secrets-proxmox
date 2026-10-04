@@ -125,7 +125,7 @@ func (b *backend) staticRoleWrite(ctx context.Context, req *logical.Request, d *
 	ctx, cancel := context.WithTimeout(ctx, provisionTimeout)
 	defer cancel()
 	name := d.Get("name").(string)
-	if err := b.recoverPendingStaticLocked(ctx, req.Storage, name); err != nil {
+	if _, err := b.recoverPendingStaticLocked(ctx, req.Storage, name); err != nil {
 		return nil, err
 	}
 	r, err := readStaticRole(ctx, req.Storage, name)
@@ -193,7 +193,7 @@ func (b *backend) staticRoleDelete(ctx context.Context, req *logical.Request, d 
 	ctx, cancel := context.WithTimeout(ctx, provisionTimeout)
 	defer cancel()
 	name := d.Get("name").(string)
-	if err := b.recoverPendingStaticLocked(ctx, req.Storage, name); err != nil {
+	if _, err := b.recoverPendingStaticLocked(ctx, req.Storage, name); err != nil {
 		return nil, err
 	}
 	r, err := readStaticRole(ctx, req.Storage, name)
@@ -267,45 +267,55 @@ func (b *backend) recoverStaticLocked(ctx context.Context, s logical.Storage, ro
 	}
 	return b.cleanupTokenLocked(ctx, s, c, rotation.New)
 }
-func (b *backend) recoverPendingStaticLocked(ctx context.Context, s logical.Storage, name string) error {
+
+// Recovery failures block only the affected roles; malformed WAL stops the batch.
+func (b *backend) recoverPendingStaticLocked(ctx context.Context, s logical.Storage, name string) (map[string]bool, error) {
 	ids, err := framework.ListWAL(ctx, s)
 	if err != nil {
-		return fmt.Errorf("cannot list static recovery records")
+		return nil, fmt.Errorf("cannot list static recovery records")
 	}
+	blocked := map[string]bool{}
+	var result error
 	for _, id := range ids {
 		wal, err := framework.GetWAL(ctx, s, id)
 		if err != nil {
-			return fmt.Errorf("cannot read static recovery record")
+			return nil, fmt.Errorf("cannot read static recovery record")
 		}
 		if wal == nil || wal.Kind != staticWALKind {
 			continue
 		}
 		rotation, err := decodeStaticRotation(wal.Data)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if name != "" && rotation.Name != name {
+		if (name != "" && rotation.Name != name) || blocked[rotation.Name] {
 			continue
 		}
 		if err := b.recoverStaticLocked(ctx, s, rotation); err != nil {
-			return err
+			blocked[rotation.Name] = true
+			result = errors.Join(result, err)
+			continue
 		}
 		if err := framework.DeleteWAL(ctx, s, id); err != nil {
-			return fmt.Errorf("cannot clear static recovery record")
+			blocked[rotation.Name] = true
+			result = errors.Join(result, fmt.Errorf("cannot clear static recovery record"))
 		}
 	}
-	return nil
+	return blocked, result
 }
 func (b *backend) periodicStaticLocked(ctx context.Context, s logical.Storage) error {
-	if err := b.recoverPendingStaticLocked(ctx, s, ""); err != nil {
-		return err
+	blocked, result := b.recoverPendingStaticLocked(ctx, s, "")
+	if blocked == nil && result != nil {
+		return result
 	}
 	names, err := s.List(ctx, staticPrefix)
 	if err != nil {
 		return fmt.Errorf("cannot list static roles")
 	}
-	var result error
 	for _, name := range names {
+		if blocked[name] {
+			continue
+		}
 		r, err := readStaticRole(ctx, s, name)
 		if err != nil {
 			result = errors.Join(result, err)

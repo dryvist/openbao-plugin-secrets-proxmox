@@ -256,3 +256,51 @@ func TestStaticCommittedWALRecovery(t *testing.T) {
 		t.Fatal("WAL recovery removed committed static credential")
 	}
 }
+
+func TestStaticRecoveryDoesNotBlockOtherSchedules(t *testing.T) {
+	b, s, f := setupStatic(t)
+	requireSuccess(t, request(t, b, s, logical.UpdateOperation, "static-roles/healthy", staticData()))
+	stalled, err := readStaticRole(context.Background(), s, "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.failMethod, f.failPath, f.failCount = http.MethodDelete, tokenPath(&stalled.Credential.Record), 100
+	f.mu.Unlock()
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{Operation: logical.UpdateOperation, Path: "static-roles/reader", Storage: s, Data: map[string]interface{}{"rotation_period": "2h"}})
+	if err == nil || resp != nil {
+		t.Fatal("expected pending retirement")
+	}
+	active, err := readStaticRole(context.Background(), s, "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeID := active.Credential.Record.fullID()
+	active.Credential.NextRotation = time.Now().Unix() - 1
+	if err := putRecord(context.Background(), s, staticPrefix+"reader", active); err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := readStaticRole(context.Background(), s, "healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := healthy.Credential.Record.fullID()
+	healthy.Credential.NextRotation = time.Now().Unix() - 1
+	if err := putRecord(context.Background(), s, staticPrefix+"healthy", healthy); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.periodic(context.Background(), &logical.Request{Storage: s}); err == nil {
+		t.Fatal("pending retirement error was not reported")
+	}
+	current := request(t, b, s, logical.ReadOperation, "static-creds/healthy", nil)
+	requireSuccess(t, current)
+	if current.Data["token_id_full"] == old {
+		t.Fatal("pending recovery blocked an unrelated due schedule")
+	}
+	retained := request(t, b, s, logical.ReadOperation, "static-creds/reader", nil)
+	requireSuccess(t, retained)
+	if retained.Data["token_id_full"] != activeID {
+		t.Fatal("pending recovery allowed another replacement for the affected role")
+	}
+	assertPrivate(t, s, current, f.secret)
+}
