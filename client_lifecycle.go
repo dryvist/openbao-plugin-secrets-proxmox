@@ -97,7 +97,7 @@ func (c *pveClient) verifyToken(ctx context.Context, r *tokenRecord) error {
 	if err := c.api.Get(ctx, tokenPath(r), &info); err != nil {
 		return pveError("token read", err)
 	}
-	if !bool(info.Privsep) || int64(info.Expire) != r.ExpiresAt || r.ExpiresAt <= time.Now().Unix() || (info.TokenID != "" && info.TokenID != r.TokenID) {
+	if !bool(info.Privsep) || int64(info.Expire) != r.ExpiresAt || (r.ExpiresAt <= time.Now().Unix() && !(r.StaticRole != "" && r.ExpiresAt == 0)) || (info.TokenID != "" && info.TokenID != r.TokenID) {
 		return fmt.Errorf("issued token does not match its privilege separation or expiration")
 	}
 	acl, err := c.api.ACL(ctx)

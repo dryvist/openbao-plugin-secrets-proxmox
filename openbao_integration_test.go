@@ -141,6 +141,30 @@ func TestOpenBaoMounts(t *testing.T) {
 	if err != nil || secondConfig == nil || secondConfig.Data["token_id"] != "manager@pve!engine" {
 		t.Fatal("native rotation crossed mount boundary")
 	}
+	if _, err := client.Logical().WriteWithContext(ctx, "first/static-roles/stable", staticData()); err != nil {
+		t.Fatalf("native static provisioning failed: %v", err)
+	}
+	static, err := client.Logical().ReadWithContext(ctx, "first/static-creds/stable")
+	if err != nil || static == nil || static.LeaseID != "" || static.Renewable || static.Data["secret"] == "" {
+		t.Fatal("static credentials did not return an unleased token")
+	}
+	encodedStatic, err := json.Marshal(static)
+	if err != nil || strings.Contains(string(encodedStatic), rotatedSecret) {
+		t.Fatal("static response disclosed management credentials")
+	}
+	if absent, err := client.Logical().ReadWithContext(ctx, "second/static-creds/stable"); err != nil || absent != nil {
+		t.Fatal("static credentials crossed mount boundary")
+	}
+	if _, err := client.Logical().WriteWithContext(ctx, "first/static-roles/stable", map[string]interface{}{"rotation_period": "2h"}); err != nil {
+		t.Fatalf("native static rotation failed: %v", err)
+	}
+	replacement, err := client.Logical().ReadWithContext(ctx, "first/static-creds/stable")
+	if err != nil || replacement == nil || replacement.Data["token_id_full"] == static.Data["token_id_full"] || first.tokenCount() != 1 {
+		t.Fatal("native static rotation did not replace predecessor")
+	}
+	if _, err := client.Logical().DeleteWithContext(ctx, "first/static-roles/stable"); err != nil || first.tokenCount() != 0 {
+		t.Fatalf("native static deletion failed: %v", err)
+	}
 	mint := func(c *api.Client, path string, fixture *lifecycleFixture) *api.Secret {
 		t.Helper()
 		secret, err := c.Logical().ReadWithContext(ctx, path)

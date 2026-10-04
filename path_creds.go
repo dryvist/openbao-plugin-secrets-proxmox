@@ -21,6 +21,7 @@ const provisionTimeout = 5 * time.Minute
 
 // No credential value belongs in ownership records, WAL, or lease internal data.
 type tokenRecord struct {
+	StaticRole string   `json:"static_role,omitempty"`
 	TokenID    string   `json:"token_id"`
 	User       string   `json:"user"`
 	RoleID     string   `json:"role_id"`
