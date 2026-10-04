@@ -1,20 +1,23 @@
 ---
 type: project
 title: OpenBao Proxmox secrets engine
-description: Gate 1 foundation for an OpenBao external secrets engine for Proxmox VE.
-tags: [openbao, proxmox, foundation]
+description: OpenBao external secrets engine with leased API tokens for Proxmox VE 9.
+tags: [openbao, proxmox, secrets-engine]
 timestamp: 2026-10-03T16:52:45Z
 ---
 
-This project is at **Gate 1: foundation only**. It provides a multiplexed
-OpenBao plugin, validated connection configuration, and role storage. It
-**cannot issue credentials yet**. Writing a role does not create a Proxmox
-user, role, ACL, or API token. Dynamic credentials, lease revocation, management
-token replacement, and static-role rotation are planned work.
+This project implements **Gate 2: dynamic credentials**. It provides a
+multiplexed OpenBao plugin, validated connection configuration, role storage,
+and renewable leased API tokens. Reading `creds/<name>` creates a
+privilege-separated token with its own ACL. OpenBao lease revocation and
+expiry delete the token. Writing a role performs validation without creating
+Proxmox resources.
 
 See the [implementation plan](docs/implementation-plan.md) for phase boundaries
-and acceptance gates. Proxmox VE 9 live acceptance and a release candidate are
-later gates; this foundation is not a production release.
+and acceptance gates. Local OpenBao tests use a TLS API fixture. Live Proxmox
+VE 9 acceptance remains pending, so Gate 2 is not yet accepted. Management
+token replacement and static-role rotation are planned for Gate 3. This is
+not a production release.
 
 ## Build and test
 
@@ -28,11 +31,13 @@ BAO_TEST_BINARY=bao go test -race -run TestOpenBaoMounts -v .
 ```
 
 The dependency baseline is Go 1.27, OpenBao SDK/API v2.7.1, and
-`github.com/luthermonson/go-proxmox` v0.8.2. The tests exercise the foundation;
-they do not establish live Proxmox credential lifecycle support. The opt-in
-OpenBao test builds and registers the plugin in an isolated, loopback-only
-development server. It checks two configured mounts against TLS PVE fixtures,
-including continued operation after unmounting one instance.
+`github.com/luthermonson/go-proxmox` v0.8.2. The tests cover privilege
+separation, ACLs, renewal limits, cleanup retries, provisioning recovery,
+and management-secret omission. The opt-in OpenBao test builds and registers
+the plugin in an isolated, loopback-only development server. It exercises
+issuance, renewal, revocation, automatic expiry, parent-token revocation, and
+two independent mounts against TLS fixtures. These checks do not establish
+live Proxmox behavior.
 
 ## Local registration
 
@@ -87,12 +92,12 @@ have privilege separation enabled (`privsep=1`). Configuration reads return
 non-secret settings only. The API supports read and write at `config`; there
 is no configuration delete operation. Required values must be nonempty, and
 unknown input fields are rejected. The endpoint and management user cannot
-change while roles exist.
+change while roles, managed resources, or recovery records exist.
 
 ## Roles
 
-Roles store the settings intended for future credential issuance. They do not
-provision anything in Proxmox at this phase. Configure the management connection
+Roles store the settings for credential issuance. Role writes do not provision
+Proxmox resources. Configure the management connection
 before creating a role; a role may not target the management token's user.
 Role writes check the requested Proxmox role or privileges remotely and verify
 the permissions of an existing target user. These authenticated validation
@@ -115,27 +120,65 @@ bao delete proxmox/roles/reader
 | Field | Meaning |
 | --- | --- |
 | `user` | Full target identity in `user@realm` form, distinct from the management user. |
-| `auto_create_user` | Whether future issuance may create a missing target user; defaults to `false`. |
+| `auto_create_user` | Whether issuance may create a missing `@pve` user; defaults to `false`. Existing users require engine ownership. |
 | `pve_role` | Proxmox role name; specify exactly one of `pve_role` or `privileges`. |
-| `privileges` | Privileges for a future managed role, as a comma-delimited string or JSON string array; mutually exclusive with `pve_role`. |
-| `acl_path` | Proxmox ACL path for future issuance, such as `/vms`. |
-| `propagate` | Whether the future ACL applies to child paths; defaults to `false`. |
-| `ttl` | Optional lease duration for future credentials; zero or omitted uses mount defaults. |
-| `max_ttl` | Optional maximum lease duration for future credentials; zero or omitted uses mount defaults. |
+| `privileges` | Privileges for a managed role, as a comma-delimited string or JSON string array; mutually exclusive with `pve_role`. |
+| `acl_path` | Proxmox ACL path for issuance, such as `/vms`. |
+| `propagate` | Whether the ACL applies to child paths; defaults to `false`. |
+| `ttl` | Optional lease duration; zero or omitted uses mount defaults. |
+| `max_ttl` | Optional maximum lease duration; zero or omitted uses mount defaults. |
 
 The API supports read, write, and delete at `roles/<name>`, and list at `roles`.
-Role reads contain configuration only. No `creds/<name>`, root rotation, or
-static-role endpoints are implemented at Gate 1.
+Role reads contain configuration only. Root rotation and static-role endpoints
+remain unimplemented.
+
+## Dynamic credentials
+
+Read `proxmox/creds/reader` using an authenticated OpenBao client. The response
+contains `token_id`, `token_id_full`, and the newly issued `secret`, together
+with a renewable OpenBao lease. Protect the response as a credential. The
+engine's management secret is never included in configuration reads or
+issued-credential responses.
+
+Each issuance creates a unique token with `privsep=1`, a unique Proxmox role
+containing the requested privilege snapshot, and a token ACL at `acl_path`.
+The token's effective rights remain bounded by its user's rights. For an
+existing user, issuance rechecks the permission ceiling and leaves that user's
+permissions unchanged. With `auto_create_user=true`, the engine creates a
+passwordless `@pve` user and grants the permission ceiling for its managed
+tokens. It refuses to adopt an existing user without an ownership record.
+
+Every issuance and renewal sets an explicit Proxmox expiry deadline. The
+returned lease duration uses the remaining whole seconds. Renewal honors the
+original maximum lifetime and mount
+limits, and verifies privilege separation, expiry, and ACLs. Later changes to
+the OpenBao role or named Proxmox role do not broaden an existing token.
+Deleting an OpenBao role does not prevent its outstanding leases from being
+revoked or renewed within their original limits.
+
+Use OpenBao's normal lease operations with the returned lease ID:
+
+```sh
+bao lease renew -increment=15m "$LEASE_ID"
+bao lease revoke "$LEASE_ID"
+```
+
+Revocation deletes the token, its ACL, and its owned Proxmox role. An owned
+user is removed after no configured role or managed token needs it and no
+other API tokens remain. Pre-existing users are retained. Unconfirmed remote
+deletion is an error so OpenBao can retry. Provisioning uses the SDK's
+write-ahead log; retained ownership records allow the backend's periodic
+callback to recover expired tokens after restart or failed lease registration.
+These recovery records contain identities and deadlines, without token values.
 
 ## Design references and license
 
-The foundation follows the official OpenBao
+The engine follows the official OpenBao
 [plugin development guide](https://openbao.org/docs/plugins/plugin-development/)
 and its `ServeMultiplex` entrypoint. The official
 [AWS](https://github.com/openbao/openbao-plugins/tree/main/secrets/aws) and
 [Nomad](https://github.com/openbao/openbao-plugins/tree/main/secrets/nomad)
-engines are source references for subsequent lifecycle work, not evidence
-that those features exist here.
+engines are source references for native leased secrets and revocation.
 
 Original project code is licensed under [Apache License 2.0](LICENSE).
 Any copied upstream code must retain its applicable license and notices.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -19,14 +20,18 @@ type backend struct {
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := &backend{}
 	b.Backend = &framework.Backend{
-		Help:        "Configure Proxmox VE 9 API-token roles. Credential issuance is not available in this foundation release.",
+		Help:        "Issue and revoke leased, privilege-separated Proxmox VE 9 API tokens.",
 		BackendType: logical.TypeLogical,
 		PathsSpecial: &logical.Paths{
 			SealWrapStorage: []string{"config"},
 		},
-		Paths:      append([]*framework.Path{pathConfig(b)}, pathsRoles(b)...),
-		Invalidate: b.invalidate,
-		Clean:      b.clean,
+		Paths:             append([]*framework.Path{pathConfig(b), pathCreds(b)}, pathsRoles(b)...),
+		Secrets:           []*framework.Secret{secretToken(b)},
+		PeriodicFunc:      b.periodic,
+		WALRollback:       b.rollback,
+		WALRollbackMinAge: 10 * time.Minute,
+		Invalidate:        b.invalidate,
+		Clean:             b.clean,
 	}
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err

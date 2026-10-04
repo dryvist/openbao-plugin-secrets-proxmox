@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -24,7 +25,7 @@ func TestOpenBaoMounts(t *testing.T) {
 	if bao == "" {
 		t.Skip("set BAO_TEST_BINARY to run real plugin registration and mount tests")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -82,11 +83,12 @@ func TestOpenBaoMounts(t *testing.T) {
 	if err := client.Sys().RegisterPluginWithContext(ctx, &api.RegisterPluginInput{Name: pluginName, Type: api.PluginTypeSecrets, Command: pluginName, SHA256: fmt.Sprintf("%x", digest)}); err != nil {
 		t.Fatal(err)
 	}
-	first := newFixture(t, "test-management-secret-A")
-	second := newFixture(t, "test-management-secret-B")
+	first := newLifecycleFixture(t)
+	second := newLifecycleFixture(t)
+	second.secret = "synthetic-private-management-sentinel-B"
 	for _, mount := range []struct {
 		name    string
-		fixture *pveFixture
+		fixture *lifecycleFixture
 	}{{"first", first}, {"second", second}} {
 		if err := client.Sys().MountWithContext(ctx, mount.name, &api.MountInput{Type: pluginName}); err != nil {
 			t.Fatal(err)
@@ -114,9 +116,82 @@ func TestOpenBaoMounts(t *testing.T) {
 	if secret, err := client.Logical().ReadWithContext(ctx, "first/roles/second"); err != nil || secret != nil {
 		t.Fatal("roles crossed mount boundary")
 	}
+	mint := func(c *api.Client, path string, fixture *lifecycleFixture) *api.Secret {
+		t.Helper()
+		secret, err := c.Logical().ReadWithContext(ctx, path)
+		if err != nil || secret == nil || secret.LeaseID == "" || !secret.Renewable || secret.LeaseDuration <= 0 {
+			t.Fatalf("dynamic issuance did not return a renewable lease: %v", err)
+		}
+		encoded, err := json.Marshal(secret)
+		if err != nil || strings.Contains(string(encoded), fixture.secret) {
+			t.Fatal("dynamic response disclosed management credentials")
+		}
+		if secret.Data["secret"] == "" || secret.Data["token_id_full"] == "" {
+			t.Fatal("dynamic response omitted issued credentials")
+		}
+		return secret
+	}
+	waitForDeletion := func(fixture *lifecycleFixture, scenario string) {
+		t.Helper()
+		deletionCtx, deletionCancel := context.WithTimeout(ctx, 15*time.Second)
+		defer deletionCancel()
+		for fixture.tokenCount() != 0 {
+			select {
+			case <-deletionCtx.Done():
+				t.Fatalf("%s did not delete the PVE token", scenario)
+			case <-ticker.C:
+			}
+		}
+	}
+	issued := mint(client, "first/creds/first", first)
+	if first.tokenCount() != 1 || second.tokenCount() != 0 {
+		t.Fatal("issuance crossed mount boundary")
+	}
+	if _, err := client.Logical().DeleteWithContext(ctx, "first/roles/first"); err != nil {
+		t.Fatal(err)
+	}
+	renewed, err := client.Sys().RenewWithContext(ctx, issued.LeaseID, 1200)
+	if err != nil || renewed == nil || renewed.LeaseDuration <= 900 || renewed.LeaseDuration > 3600 {
+		t.Fatalf("native renewal did not honor the original maximum: %v", err)
+	}
+	if err := client.Sys().RevokeWithContext(ctx, issued.LeaseID); err != nil {
+		t.Fatal(err)
+	}
+	if first.tokenCount() != 0 {
+		t.Fatal("native lease revocation did not delete the PVE token")
+	}
+	shortRole := roleData()
+	shortRole["ttl"], shortRole["max_ttl"] = "5s", "10s"
+	if _, err := client.Logical().WriteWithContext(ctx, "first/roles/short", shortRole); err != nil {
+		t.Fatal(err)
+	}
+	mint(client, "first/creds/short", first)
+	waitForDeletion(first, "OpenBao lease expiry")
+	if err := client.Sys().PutPolicyWithContext(ctx, "mint-test", `path "second/creds/second" { capabilities = ["read"] }`); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := client.Auth().Token().CreateWithContext(ctx, &api.TokenCreateRequest{Policies: []string{"mint-test"}, TTL: "1m"})
+	if err != nil || parent == nil || parent.Auth == nil {
+		t.Fatalf("could not create test parent token: %v", err)
+	}
+	childClient, err := api.NewClient(&api.Config{Address: "http://" + address, HttpClient: &http.Client{Timeout: 5 * time.Second}, DisableEnvironment: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childClient.SetToken(parent.Auth.ClientToken)
+	mint(childClient, "second/creds/second", second)
+	if err := client.Auth().Token().RevokeTreeWithContext(ctx, parent.Auth.ClientToken); err != nil {
+		t.Fatal(err)
+	}
+	waitForDeletion(second, "parent token revocation")
+	mint(client, "first/creds/short", first)
+	mint(client, "second/creds/second", second)
 	// Unmounting one multiplexed instance must leave the other operational.
 	if err := client.Sys().UnmountWithContext(ctx, "first"); err != nil {
 		t.Fatal(err)
+	}
+	if first.tokenCount() != 0 || second.tokenCount() != 1 {
+		t.Fatal("unmount did not revoke only its own leases")
 	}
 	if secret, err := client.Logical().ReadWithContext(ctx, "second/roles/second"); err != nil || secret == nil {
 		t.Fatal("remaining mount stopped after unmount")
@@ -126,5 +201,8 @@ func TestOpenBaoMounts(t *testing.T) {
 	}
 	if err := client.Sys().UnmountWithContext(ctx, "second"); err != nil {
 		t.Fatal(err)
+	}
+	if second.tokenCount() != 0 {
+		t.Fatal("final unmount did not delete its leased PVE token")
 	}
 }
