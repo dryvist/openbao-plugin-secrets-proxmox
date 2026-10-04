@@ -23,7 +23,7 @@ func (c *pveClient) users(ctx context.Context) (pve.Users, error) {
 		return nil, fmt.Errorf("invalid PVE user collection")
 	}
 	for _, user := range users {
-		if user == nil || !validUser(user.UserID) {
+		if user == nil || user.UserID == "" {
 			return nil, fmt.Errorf("invalid PVE user collection")
 		}
 	}

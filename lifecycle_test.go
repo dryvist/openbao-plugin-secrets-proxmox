@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	pve "github.com/luthermonson/go-proxmox"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -239,5 +240,56 @@ func TestDynamicRestartAndRegistrationGap(t *testing.T) {
 	resp, err := restarted.HandleRequest(context.Background(), &logical.Request{Operation: logical.RollbackOperation, Storage: s})
 	if err != nil || (resp != nil && resp.IsError()) || f.tokenCount() != 0 {
 		t.Fatalf("persisted recovery failed: %v", err)
+	}
+}
+
+func TestDynamicUnrelatedUserSyntax(t *testing.T) {
+	b, s, f := setupLifecycle(t)
+	f.mu.Lock()
+	f.users["ops+ci@pve"] = &pve.User{UserID: "ops+ci@pve", Enable: true}
+	f.mu.Unlock()
+	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+	requireSuccess(t, issued)
+	if _, err := operateLease(b, s, issued, logical.RevokeOperation); err != nil {
+		t.Fatalf("unrelated user prevented revocation: %v", err)
+	}
+	data := roleData()
+	data["user"], data["auto_create_user"] = "owned@pve", true
+	requireSuccess(t, request(t, b, s, logical.UpdateOperation, "roles/owned", data))
+	issued = request(t, b, s, logical.ReadOperation, "creds/owned", nil)
+	requireSuccess(t, issued)
+	record, err := leaseRecord(&logical.Request{Secret: issued.Secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ExpiresAt = time.Now().Add(-time.Second).Unix()
+	if err := putRecord(context.Background(), s, tokenPrefix+record.TokenID, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.periodic(context.Background(), &logical.Request{Storage: s}); err != nil {
+		t.Fatalf("unrelated user prevented periodic cleanup: %v", err)
+	}
+	if f.tokenCount() != 0 {
+		t.Fatal("unrelated user prevented token deletion")
+	}
+}
+
+func TestDynamicMalformedUserCollection(t *testing.T) {
+	for _, user := range []*pve.User{nil, {}} {
+		b, s, f := setupLifecycle(t)
+		issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+		requireSuccess(t, issued)
+		f.mu.Lock()
+		f.users["malformed"] = user
+		f.mu.Unlock()
+		if _, err := operateLease(b, s, issued, logical.RevokeOperation); err == nil || f.tokenCount() != 1 {
+			t.Fatal("malformed user collection did not fail closed")
+		}
+		f.mu.Lock()
+		delete(f.users, "malformed")
+		f.mu.Unlock()
+		if _, err := operateLease(b, s, issued, logical.RevokeOperation); err != nil {
+			t.Fatalf("corrected user collection prevented retry: %v", err)
+		}
 	}
 }
