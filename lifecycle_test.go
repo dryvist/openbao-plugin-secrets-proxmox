@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -173,6 +174,10 @@ func TestDynamicRevokeRetryAndInvalidCollection(t *testing.T) {
 func TestDynamicRenewalRetry(t *testing.T) {
 	b, s, f := setupLifecycle(t)
 	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+	original, err := leaseRecord(&logical.Request{Secret: issued.Secret})
+	if err != nil {
+		t.Fatal(err)
+	}
 	issued.Secret.Increment = time.Minute
 	f.mu.Lock()
 	f.failMethod, f.failPath, f.failCount = http.MethodPut, "/access/users/reader@pve/token/", 1
@@ -180,8 +185,64 @@ func TestDynamicRenewalRetry(t *testing.T) {
 	if _, err := operateLease(b, s, issued, logical.RenewOperation); err == nil {
 		t.Fatal("upstream renewal failure reported success")
 	}
+	stored, err := readTokenRecord(context.Background(), s, original.TokenID)
+	if err != nil || stored == nil || stored.ExpiresAt != original.ExpiresAt {
+		t.Fatal("rejected renewal changed the committed cleanup deadline")
+	}
 	if _, err := operateLease(b, s, issued, logical.RenewOperation); err != nil {
 		t.Fatalf("renewal retry failed: %v", err)
+	}
+}
+
+type rejectTokenWriteStorage struct{ logical.Storage }
+
+func (s rejectTokenWriteStorage) Put(ctx context.Context, entry *logical.StorageEntry) error {
+	if strings.HasPrefix(entry.Key, tokenPrefix) {
+		return errors.New("synthetic token record write failure")
+	}
+	return s.Storage.Put(ctx, entry)
+}
+
+func TestDynamicRenewalPersistenceFailure(t *testing.T) {
+	b, s, f := setupLifecycle(t)
+	requireSuccess(t, request(t, b, s, logical.UpdateOperation, "roles/reader", map[string]interface{}{"ttl": "2s"}))
+	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+	requireSuccess(t, issued)
+	original, err := leaseRecord(&logical.Request{Secret: issued.Secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued.Secret.Increment = time.Minute
+	resp, err := operateLease(b, rejectTokenWriteStorage{s}, issued, logical.RenewOperation)
+	if err == nil || resp != nil || strings.Contains(err.Error(), f.secret) {
+		t.Fatal("uncommitted renewal returned success or a management secret")
+	}
+	stored, err := readTokenRecord(context.Background(), s, original.TokenID)
+	if err != nil || stored == nil || stored.ExpiresAt != original.ExpiresAt {
+		t.Fatal("uncommitted renewal changed the cleanup deadline")
+	}
+	f.mu.Lock()
+	remoteExpiry := int64(f.tokens[original.User][original.TokenID].Expire)
+	f.mu.Unlock()
+	if remoteExpiry <= original.ExpiresAt {
+		t.Fatal("test did not exercise remote success before storage failure")
+	}
+	conf := logical.TestBackendConfig()
+	conf.StorageView, conf.System = s, b.System()
+	restarted, err := Factory(context.Background(), conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Cleanup(context.Background()) })
+	time.Sleep(time.Until(time.Unix(original.ExpiresAt, 0)) + 50*time.Millisecond)
+	resp, err = restarted.HandleRequest(context.Background(), &logical.Request{Operation: logical.RollbackOperation, Storage: s})
+	if err != nil || (resp != nil && resp.IsError()) || f.tokenCount() != 0 {
+		t.Fatalf("restart did not clean up unacknowledged renewal: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.acl) != 0 || f.roles[original.RoleID] != nil {
+		t.Fatal("unacknowledged renewal left ACL or role resources")
 	}
 }
 

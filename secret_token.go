@@ -74,13 +74,16 @@ func (b *backend) tokenRenew(ctx context.Context, req *logical.Request, _ *frame
 	if record.ExpiresAt > record.IssuedAt+record.MaxTTL {
 		record.ExpiresAt = record.IssuedAt + record.MaxTTL
 	}
-	if err := putRecord(ctx, req.Storage, tokenPrefix+record.TokenID, record); err != nil {
-		return nil, err
-	}
 	if err := c.api.Put(ctx, tokenPath(record), map[string]interface{}{"expire": record.ExpiresAt, "privsep": 1}, nil); err != nil {
 		return nil, pveError("token renewal", err)
 	}
 	if err := c.verifyToken(ctx, record); err != nil {
+		return nil, err
+	}
+	// Commit only a verified renewal. A failed write or interruption leaves the
+	// original cleanup deadline intact, so an unacknowledged remote extension
+	// cannot prolong ownership of the token or its ACLs.
+	if err := putRecord(ctx, req.Storage, tokenPrefix+record.TokenID, record); err != nil {
 		return nil, err
 	}
 	remaining := time.Until(time.Unix(record.ExpiresAt, 0)).Truncate(time.Second)
