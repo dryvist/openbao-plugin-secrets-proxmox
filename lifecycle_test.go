@@ -354,3 +354,39 @@ func TestDynamicMalformedUserCollection(t *testing.T) {
 		}
 	}
 }
+
+func TestDynamicUnrelatedTokenSyntax(t *testing.T) {
+	b, s, f := setupLifecycle(t)
+	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+	requireSuccess(t, issued)
+	external := "external-" + strings.Repeat("x", 80)
+	f.mu.Lock()
+	f.tokens["reader@pve"][external] = pve.Token{TokenID: external, Privsep: true}
+	f.mu.Unlock()
+	if _, err := operateLease(b, s, issued, logical.RevokeOperation); err != nil {
+		t.Fatalf("unrelated token prevented revocation: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.tokens["reader@pve"]) != 1 || f.tokens["reader@pve"][external].TokenID != external {
+		t.Fatal("revocation changed an unrelated token")
+	}
+}
+
+func TestDynamicMalformedTokenEntry(t *testing.T) {
+	b, s, f := setupLifecycle(t)
+	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+	requireSuccess(t, issued)
+	f.mu.Lock()
+	f.tokens["reader@pve"]["malformed"] = pve.Token{}
+	f.mu.Unlock()
+	if _, err := operateLease(b, s, issued, logical.RevokeOperation); err == nil {
+		t.Fatal("empty token identity did not fail closed")
+	}
+	f.mu.Lock()
+	delete(f.tokens["reader@pve"], "malformed")
+	f.mu.Unlock()
+	if _, err := operateLease(b, s, issued, logical.RevokeOperation); err != nil {
+		t.Fatalf("corrected token entry prevented cleanup retry: %v", err)
+	}
+}

@@ -29,7 +29,7 @@ func leaseRecord(req *logical.Request) (*tokenRecord, error) {
 	if err := json.Unmarshal([]byte(snapshot), &record); err != nil {
 		return nil, fmt.Errorf("invalid token lease identity")
 	}
-	if !validUser(record.User) || !validIdentifier(record.TokenID) || !validIdentifier(record.RoleID) || record.MaxTTL <= 0 || record.IssuedAt <= 0 {
+	if !validUser(record.User) || !validIdentifier(record.TokenID) || !validIdentifier(record.RoleID) || record.StaticRole != "" || record.MaxTTL <= 0 || record.IssuedAt <= 0 {
 		return nil, fmt.Errorf("invalid token lease identity")
 	}
 	return &record, nil
@@ -176,6 +176,19 @@ func (b *backend) cleanupUsersLocked(ctx context.Context, s logical.Storage, c *
 			needed[r.User] = true
 		}
 	}
+	staticNames, err := s.List(ctx, staticPrefix)
+	if err != nil {
+		return fmt.Errorf("cannot list static roles")
+	}
+	for _, name := range staticNames {
+		r, err := readStaticRole(ctx, s, name)
+		if err != nil {
+			return err
+		}
+		if r != nil {
+			needed[r.Role.User] = true
+		}
+	}
 	tokens, err := s.List(ctx, tokenPrefix)
 	if err != nil {
 		return fmt.Errorf("cannot list token records")
@@ -247,6 +260,8 @@ func (b *backend) cleanupUsersLocked(ctx context.Context, s logical.Storage, c *
 }
 
 func (b *backend) periodic(ctx context.Context, req *logical.Request) error {
+	ctx, cancel := context.WithTimeout(ctx, provisionTimeout)
+	defer cancel()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ids, err := req.Storage.List(ctx, tokenPrefix)
@@ -257,20 +272,21 @@ func (b *backend) periodic(ctx context.Context, req *logical.Request) error {
 	if err != nil {
 		return fmt.Errorf("cannot list user ownership")
 	}
+	staticErr := b.periodicStaticLocked(ctx, req.Storage)
 	if len(ids) == 0 && len(owned) == 0 {
-		return nil
+		return staticErr
 	}
 	c, err := b.clientLocked(ctx, req.Storage)
 	if err != nil {
 		return err
 	}
-	var result error
+	result := staticErr
 	for _, id := range ids {
 		record, err := readTokenRecord(ctx, req.Storage, id)
 		if err != nil {
 			return err
 		}
-		if record != nil && record.ExpiresAt <= time.Now().Unix() {
+		if record != nil && record.StaticRole == "" && record.ExpiresAt <= time.Now().Unix() {
 			if err := b.cleanupTokenLocked(ctx, req.Storage, c, record); err != nil {
 				result = errors.Join(result, err)
 			}
@@ -280,6 +296,28 @@ func (b *backend) periodic(ctx context.Context, req *logical.Request) error {
 }
 
 func (b *backend) rollback(ctx context.Context, req *logical.Request, kind string, data interface{}) error {
+	if kind == staticWALKind {
+		rotation, err := decodeStaticRotation(data)
+		if err != nil {
+			return err
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.recoverStaticLocked(ctx, req.Storage, rotation)
+	}
+	if kind == rootWALKind {
+		encoded, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("invalid management recovery record")
+		}
+		var rotation rootRotation
+		if err := json.Unmarshal(encoded, &rotation); err != nil {
+			return fmt.Errorf("invalid management recovery record")
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.recoverRootLocked(ctx, req.Storage, &rotation)
+	}
 	if kind != tokenWALKind {
 		return fmt.Errorf("unknown provisioning recovery kind")
 	}
@@ -288,7 +326,7 @@ func (b *backend) rollback(ctx context.Context, req *logical.Request, kind strin
 		return fmt.Errorf("invalid provisioning recovery record")
 	}
 	var record tokenRecord
-	if err := json.Unmarshal(encoded, &record); err != nil || !validUser(record.User) || !validIdentifier(record.TokenID) || !validIdentifier(record.RoleID) {
+	if err := json.Unmarshal(encoded, &record); err != nil || record.StaticRole != "" || !validUser(record.User) || !validIdentifier(record.TokenID) || !validIdentifier(record.RoleID) {
 		return fmt.Errorf("invalid provisioning recovery identity")
 	}
 	b.mu.Lock()

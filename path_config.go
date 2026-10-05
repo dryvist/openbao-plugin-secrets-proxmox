@@ -72,6 +72,13 @@ func (b *backend) configWrite(ctx context.Context, req *logical.Request, d *fram
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	_, pending, err := pendingRootRotation(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if pending != nil {
+		return logical.ErrorResponse("finish management rotation recovery before changing configuration"), nil
+	}
 	previous, err := readConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
@@ -103,7 +110,7 @@ func (b *backend) configWrite(ctx context.Context, req *logical.Request, d *fram
 		if len(roles) > 0 {
 			return logical.ErrorResponse("endpoint and management user cannot change while roles exist"), nil
 		}
-		for _, prefix := range []string{tokenPrefix, userPrefix, framework.WALPrefix} {
+		for _, prefix := range []string{staticPrefix, tokenPrefix, userPrefix, framework.WALPrefix} {
 			keys, err := req.Storage.List(ctx, prefix)
 			if err != nil {
 				return nil, fmt.Errorf("cannot check managed resources")

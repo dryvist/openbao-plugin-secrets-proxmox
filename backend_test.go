@@ -374,16 +374,6 @@ func TestConcurrentMountIsolationAndInvalidation(t *testing.T) {
 	}
 }
 
-func TestUnavailableRotationEndpoints(t *testing.T) {
-	b, s := newTestBackend(t)
-	for _, path := range []string{"config/rotate-root", "static-roles/reader", "static-creds/reader"} {
-		_, err := b.HandleRequest(context.Background(), &logical.Request{Operation: logical.UpdateOperation, Path: path, Storage: s})
-		if err != logical.ErrUnsupportedPath {
-			t.Errorf("%s: expected unsupported path, got %v", path, err)
-		}
-	}
-}
-
 func TestPrivateKeyInCABundleRejected(t *testing.T) {
 	f := newFixture(t, "test-management-secret-A")
 	b, s := newTestBackend(t)

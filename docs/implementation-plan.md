@@ -3,12 +3,13 @@ type: implementation-plan
 title: Proxmox secrets engine implementation gates
 description: Phased implementation and acceptance criteria for a Proxmox OpenBao secrets engine.
 tags: [openbao, proxmox, plan]
-timestamp: 2026-10-03T16:52:45Z
+timestamp: 2026-10-04T13:50:00Z
 ---
 
-The approved implementation scope is **Gate 2**. Dynamic credentials are
+The approved implementation scope is **Gate 3**. Dynamic credentials are
 implemented with local fixture coverage; live PVE 9 acceptance is pending.
-Rotation remains planned work requiring the next gate decision.
+An explicit gate exception authorizes rotation implementation while deferring
+live acceptance. It does not accept Gate 2 or authorize production deployment.
 The [README](../README.md) is the current configuration and role reference.
 
 ## Phases
@@ -17,7 +18,7 @@ The [README](../README.md) is the current configuration and role reference.
 | --- | --- | --- |
 | 1 | Multiplexed plugin; secure connection configuration; validated role read, write, delete, and list; build and tests. | Implemented and locally verified. |
 | 2 | Leased `privsep=1` tokens; provisioning at issuance; native `framework.Secret` revocation. | Implemented; live acceptance pending. |
-| 3 | Private management token replacement; static roles and rotation. | Planned. |
+| 3 | Private management token replacement; static roles and rotation. | Rotation implemented and tested locally; live acceptance deferred. |
 | 4 | PVE and OpenBao acceptance; signed artifacts and operational documentation. | Planned; no production publication. |
 
 Phase 2 uses a unique managed Proxmox role per token to preserve the requested
@@ -56,17 +57,34 @@ procedures, and secret values out of public documentation and evidence.
 
 ## Remaining work
 
-Gate 2 still requires a non-production PVE 9 environment to establish allowed
-and denied actions and actual token deletion. A local API fixture does not
-replace this gate. Stop before Gate 3 implementation until the operator
-decides how to proceed with live acceptance.
+Gate 2 still requires live PVE 9 evidence to establish allowed and denied
+actions and actual token deletion. A local API fixture does not replace this
+gate. The Gate 3 implementation exception permits code and local testing;
+live acceptance and production deployment remain separate decisions.
 
-At Gate 3, add `config/rotate-root`, `static-roles/<name>`, and
+## Gate 3 design and verification
+
+The engine provides `config/rotate-root`, `static-roles/<name>`, and
 `static-creds/<name>` using the existing SDK callbacks and storage. Management
 token replacement must create and verify the replacement before retiring the
 old token, persist recovery state across interruptions, and return no private
 credential. Static rotation must retain a usable token until its replacement
 is verified, resume after restart, and follow each role's rotation schedule.
+
+Management rotation was implemented before static rotation. Preserve the configured
+management token's own ACL scope on a privilege-separated replacement. Persist
+the verified replacement only in seal-wrapped credential storage. Recovery
+records carry identities and lifecycle state, never credential values. Test
+interruption before and after the credential switch, rejected storage writes,
+failed retirement, restart recovery, and cross-mount isolation.
+
+Static rotation must preserve each role's declared permission scope and keep
+the current credential available until replacement is verified and stored.
+Test scheduled replacement, failed replacement and retirement, restart with a
+pending rotation, role deletion, and management-user exclusion. Reuse the SDK
+periodic callback, durable storage, and WAL rather than adding a scheduler
+service. Gate 4 remains pending until real PVE acceptance and release-artifact
+verification are complete.
 
 ## Native interfaces and references
 
