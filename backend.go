@@ -3,6 +3,8 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,11 +19,21 @@ type backend struct {
 	client *pveClient
 }
 
+// runningVersion reports the semantic version Go stamped into the plugin binary.
+// OpenBao requires a leading "v"; unversioned builds report nothing.
+func runningVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && strings.HasPrefix(info.Main.Version, "v") {
+		return info.Main.Version
+	}
+	return ""
+}
+
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := &backend{}
 	b.Backend = &framework.Backend{
-		Help:        "Issue and revoke leased, privilege-separated Proxmox VE 9 API tokens.",
-		BackendType: logical.TypeLogical,
+		Help:           "Issue and revoke leased, privilege-separated Proxmox VE 9 API tokens.",
+		BackendType:    logical.TypeLogical,
+		RunningVersion: runningVersion(),
 		PathsSpecial: &logical.Paths{
 			SealWrapStorage: []string{"config", staticPrefix},
 		},
