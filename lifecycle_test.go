@@ -355,6 +355,33 @@ func TestDynamicMalformedUserCollection(t *testing.T) {
 	}
 }
 
+func TestDynamicMalformedRoleCollection(t *testing.T) {
+	b, s, f := setupLifecycle(t)
+	f.mu.Lock()
+	f.nullRole = true
+	f.mu.Unlock()
+	if resp, err := b.HandleRequest(context.Background(), &logical.Request{Operation: logical.ReadOperation, Path: "creds/reader", Storage: s}); err == nil && !resp.IsError() {
+		t.Fatal("malformed role collection did not block issuance")
+	}
+	f.mu.Lock()
+	f.nullRole = false
+	f.mu.Unlock()
+	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
+	requireSuccess(t, issued)
+	f.mu.Lock()
+	f.nullRole = true
+	f.mu.Unlock()
+	if _, err := operateLease(b, s, issued, logical.RevokeOperation); err == nil {
+		t.Fatal("malformed role collection did not fail closed")
+	}
+	f.mu.Lock()
+	f.nullRole = false
+	f.mu.Unlock()
+	if _, err := operateLease(b, s, issued, logical.RevokeOperation); err != nil {
+		t.Fatalf("corrected role collection prevented retry: %v", err)
+	}
+}
+
 func TestDynamicUnrelatedTokenSyntax(t *testing.T) {
 	b, s, f := setupLifecycle(t)
 	issued := request(t, b, s, logical.ReadOperation, "creds/reader", nil)
