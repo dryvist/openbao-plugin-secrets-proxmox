@@ -3,6 +3,7 @@ module github.com/dryvist/openbao-plugin-secrets-proxmox
 go 1.27.0
 
 require (
+	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-uuid v1.0.4
 	github.com/luthermonson/go-proxmox v0.8.2
 	github.com/openbao/openbao/api/v2 v2.7.1
@@ -25,7 +26,6 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/hashicorp/go-hclog v1.6.3 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-metrics v0.6.1 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect

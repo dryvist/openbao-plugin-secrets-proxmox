@@ -30,6 +30,24 @@ func (c *pveClient) users(ctx context.Context) (pve.Users, error) {
 	return users, nil
 }
 
+// The upstream Roles helper dereferences every collection entry before returning,
+// so a null entry would crash the plugin. Decode directly and fail closed.
+func (c *pveClient) roles(ctx context.Context) (pve.Roles, error) {
+	var roles pve.Roles
+	if err := c.api.Get(ctx, "/access/roles", &roles); err != nil {
+		return nil, pveError("role list", err)
+	}
+	if roles == nil {
+		return nil, fmt.Errorf("invalid PVE role collection")
+	}
+	for _, role := range roles {
+		if role == nil || role.RoleID == "" {
+			return nil, fmt.Errorf("invalid PVE role collection")
+		}
+	}
+	return roles, nil
+}
+
 func (c *pveClient) ownedUser(ctx context.Context, s logical.Storage, user, marker string) (string, bool, error) {
 	entry, err := s.Get(ctx, userPrefix+user)
 	if err != nil {
@@ -207,18 +225,12 @@ func (c *pveClient) removeACL(ctx context.Context, r *tokenRecord, userGrant boo
 }
 
 func (c *pveClient) deleteRole(ctx context.Context, r *tokenRecord) error {
-	roles, err := c.api.Roles(ctx)
+	roles, err := c.roles(ctx)
 	if err != nil {
-		return pveError("role list", err)
-	}
-	if roles == nil {
-		return fmt.Errorf("invalid PVE role collection")
+		return err
 	}
 	present := false
 	for _, role := range roles {
-		if role == nil {
-			return fmt.Errorf("invalid PVE role collection")
-		}
 		if role.RoleID == r.RoleID {
 			present = true
 		}
@@ -241,15 +253,12 @@ func (c *pveClient) deleteRole(ctx context.Context, r *tokenRecord) error {
 	if err := c.api.Delete(ctx, "/access/roles/"+url.PathEscape(r.RoleID), nil); err != nil {
 		return pveError("role deletion", err)
 	}
-	roles, err = c.api.Roles(ctx)
+	roles, err = c.roles(ctx)
 	if err != nil {
-		return pveError("role list", err)
-	}
-	if roles == nil {
-		return fmt.Errorf("invalid PVE role collection")
+		return err
 	}
 	for _, role := range roles {
-		if role == nil || role.RoleID == r.RoleID {
+		if role.RoleID == r.RoleID {
 			return fmt.Errorf("PVE role deletion was not confirmed")
 		}
 	}

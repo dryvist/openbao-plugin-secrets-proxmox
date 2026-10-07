@@ -27,6 +27,7 @@ type lifecycleFixture struct {
 	failCount       int
 	echoSecret      bool
 	nullTokens      bool
+	nullRole        bool
 	privsepRejected bool
 }
 
@@ -167,6 +168,9 @@ func (f *lifecycleFixture) serve(w http.ResponseWriter, r *http.Request) {
 			roles := pve.Roles{}
 			for id := range f.roles {
 				roles = append(roles, &pve.Role{RoleID: id})
+			}
+			if f.nullRole {
+				roles = append(roles, nil)
 			}
 			data = roles
 		} else if r.Method == http.MethodPost {

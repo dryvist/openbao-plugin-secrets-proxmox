@@ -188,12 +188,12 @@ func prepareToken(ctx context.Context, storage logical.Storage, c *pveClient, r 
 			return nil, false, err
 		}
 	}
-	roles, err := c.api.Roles(ctx)
-	if err != nil || roles == nil {
-		return nil, false, fmt.Errorf("cannot verify role identity availability")
+	roles, err := c.roles(ctx)
+	if err != nil {
+		return nil, false, err
 	}
 	for _, existing := range roles {
-		if existing == nil || existing.RoleID == record.RoleID {
+		if existing.RoleID == record.RoleID {
 			return nil, false, fmt.Errorf("cannot allocate an unused role identity")
 		}
 	}
