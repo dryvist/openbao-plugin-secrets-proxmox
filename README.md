@@ -6,6 +6,13 @@ tags: [openbao, proxmox, secrets-engine]
 timestamp: 2026-10-03T16:52:45Z
 ---
 
+[![CI][ci-badge]][ci] [![License: Apache 2.0][license-badge]][license]
+
+[ci-badge]: https://github.com/dryvist/openbao-plugin-secrets-proxmox/actions/workflows/ci.yml/badge.svg
+[ci]: https://github.com/dryvist/openbao-plugin-secrets-proxmox/actions/workflows/ci.yml
+[license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
+[license]: LICENSE
+
 This project implements dynamic credentials and Gate 3 rotation. It provides a
 multiplexed OpenBao plugin, validated connection configuration, role storage,
 and renewable leased API tokens. Reading `creds/<name>` creates a
@@ -41,7 +48,7 @@ static credential reads and replacement, and two independent mounts against
 TLS fixtures. These checks do not establish
 live Proxmox behavior.
 
-## Local registration
+## Installation
 
 Use a local OpenBao server configured with a writable `plugin_directory` and
 an authenticated `bao` CLI session with permission to register and mount
@@ -59,8 +66,16 @@ bao secrets enable -path=proxmox openbao-plugin-secrets-proxmox
 
 This uses the OpenBao [plugin registration interface](https://openbao.org/docs/plugins/).
 The checksum identifies the locally built binary; it is not a release signature.
+The plugin reports the module version that Go stamps into the binary. A build
+from a tagged commit reports its tag; a build without version information
+reports none.
 
-## Configuration
+## Usage
+
+Mount the engine, configure the Proxmox connection, define roles, and read
+credentials.
+
+### Configuration
 
 Write connection settings at `proxmox/config`. Supply secret material through
 a protected file. In this example, `PROXMOX_TOKEN_SECRET_FILE` contains the
@@ -96,7 +111,7 @@ is no configuration delete operation. Required values must be nonempty, and
 unknown input fields are rejected. The endpoint and management user cannot
 change while roles, managed resources, or recovery records exist.
 
-## Roles
+### Roles
 
 Roles store the settings for credential issuance. Role writes do not provision
 Proxmox resources. Configure the management connection
@@ -133,7 +148,7 @@ bao delete proxmox/roles/reader
 The API supports read, write, and delete at `roles/<name>`, and list at `roles`.
 Role reads contain configuration only.
 
-## Management credential rotation
+### Management credential rotation
 
 The configured management token must be dedicated to this engine mount.
 Rotate it through the standard write endpoint:
@@ -156,7 +171,7 @@ the SDK rollback callback completes recovery; configuration writes are blocked
 while recovery is pending. These behaviors have local fixture coverage, with
 live PVE acceptance pending.
 
-## Dynamic credentials
+### Dynamic credentials
 
 Read `proxmox/creds/reader` using an authenticated OpenBao client. The response
 contains `token_id`, `token_id_full`, and the newly issued `secret`, together
@@ -195,7 +210,7 @@ write-ahead log; retained ownership records allow the backend's periodic
 callback to recover expired tokens after restart or failed lease registration.
 These recovery records contain identities and deadlines, without token values.
 
-## Static credentials
+### Static credentials
 
 Static roles manage long-lived, privilege-separated tokens on an interval.
 They use the same permission fields as dynamic roles and require a
@@ -237,7 +252,7 @@ credential, and cleans up its owned resources. Recovery retries incomplete
 deletion after restart. Dynamic expiry cleanup skips static tokens. Each mount
 keeps its own static credentials and schedule.
 
-## Design references and license
+## Design references
 
 The engine follows the official OpenBao
 [plugin development guide](https://openbao.org/docs/plugins/plugin-development/)
@@ -246,5 +261,15 @@ and its `ServeMultiplex` entrypoint. The official
 [Nomad](https://github.com/openbao/openbao-plugins/tree/main/secrets/nomad)
 engines are source references for native leased secrets and revocation.
 
+## Contributing
+
+Open a pull request against `main`. Run `gofmt -l .`, `go vet ./...`, and
+`go test -race ./...` first. CI runs the same checks, plus the OpenBao
+registration test, `govulncheck`, Markdown lint, and Nix validation.
+
+## License
+
 Original project code is licensed under [Apache License 2.0](LICENSE).
 Any copied upstream code must retain its applicable license and notices.
+
+More documentation: <https://docs.jacobpevans.com>
