@@ -39,9 +39,9 @@ jobs:
       - name: Race tests
         run: go test -race ./...
   markdown:
-    uses: dryvist/.github/.github/workflows/_markdown-lint.yml@f9e8814ad8f82e4bc8cdaac73ee49b1ffa6d4cf2 # v1.12.1
+    uses: dryvist/.github/.github/workflows/_markdown-lint.yml@74e4e37bd0c362dd145ad0537361084336c8ff55 # v1.14.1
   nix:
-    uses: dryvist/.github/.github/workflows/_nix-validate.yml@f9e8814ad8f82e4bc8cdaac73ee49b1ffa6d4cf2 # v1.12.1
+    uses: dryvist/.github/.github/workflows/_nix-validate.yml@74e4e37bd0c362dd145ad0537361084336c8ff55 # v1.14.1
     with:
       all_systems: false
   integration:
