@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-uuid v1.0.4
-	github.com/luthermonson/go-proxmox v0.8.2
+	github.com/luthermonson/go-proxmox v0.12.0
 	github.com/openbao/openbao/api/v2 v2.7.1
 	github.com/openbao/openbao/sdk/v2 v2.7.1
 )
